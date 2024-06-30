@@ -1,0 +1,80 @@
+version: '3'
+
+services:
+  postgresql:
+    image: postgres:16
+    container_name: db_for_exchange
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASS}
+      POSTGRES_DB: ${POSTGRES_DB}
+    command: -p ${POSTGRES_PORT}
+    ports:
+      - "${POSTGRES_PORT}:${POSTGRES_PORT}"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -p ${POSTGRES_PORT}" ]
+      interval: 10s
+      timeout: 10s
+      retries: 7
+    restart: always
+
+  api:
+    build: .
+    container_name: api_for_exchange
+    ports:
+      - ${API_PORT}:${API_PORT}
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    entrypoint:
+      - ./docker-entrypoint.sh
+    restart: always
+
+  celery_app:
+    build: .
+    command: celery -A celery_config worker --loglevel=info
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+      - api
+
+  beat:
+    build: .
+    command: celery -A celery_config beat --loglevel=info
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+      - celery_app
+
+  flower:
+    image: mher/flower:2.0.1
+    ports:
+      - '${FLOWER_PORT}:5555'
+    environment:
+      - CELERY_BROKER_URL=redis://redis:${REDIS_PORT}/0
+      - CELERY_RESULT_BACKEND=redis://redis:${REDIS_PORT}/1
+      - FLOWER_URL_PREFIX=flower
+      - FLOWER_TZ=Europe/Moscow
+      - FLOWER_BASIC_AUTH=${FLOWER_BASIC_AUTH}
+    restart: always
+    depends_on:
+      - celery_app
+    links:
+      - redis
+
+  redis:
+    image: redis:7.2-alpine
+    command: --port ${REDIS_PORT}
+    #    expose:
+    #      - 6379
+    ports:
+      - ${REDIS_PORT}:${REDIS_PORT}
+    restart: always
+
+
+volumes:
+  postgres_data:
